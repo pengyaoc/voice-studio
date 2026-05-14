@@ -4,9 +4,143 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Voice Studio</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        bg: { primary: '#0f0f1a', secondary: '#1a1a2e', tertiary: '#2a2a3e' },
+                        accent: '#7c8aff',
+                        'accent-hover': '#6b78ee',
+                    }
+                }
+            }
+        }
+    </script>
+    <link rel="stylesheet" href="/style.css">
 </head>
-<body>
-    <h1>Voice Studio</h1>
-    <p>Loading...</p>
+<body class="bg-bg-primary text-gray-200 min-h-screen font-sans">
+    <!-- Header -->
+    <header class="flex items-center justify-between px-6 py-4 border-b border-gray-800">
+        <h1 class="text-xl font-bold text-white">Voice Studio</h1>
+        <span class="text-xs text-gray-500" id="device-badge">Qwen3-TTS</span>
+    </header>
+
+    <!-- Tab Bar -->
+    <nav class="flex border-b border-gray-800" id="tab-bar">
+        <button class="tab-btn active" data-tab="custom-voice">Custom Voice</button>
+        <button class="tab-btn" data-tab="voice-clone">Voice Clone</button>
+        <button class="tab-btn" data-tab="voice-design">Voice Design</button>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="grid grid-cols-2 min-h-[calc(100vh-105px)]">
+        <!-- Left: Input Panel -->
+        <div class="p-6 border-r border-gray-800">
+            <!-- Custom Voice Tab -->
+            <div id="tab-custom-voice" class="tab-content">
+                <div class="grid grid-cols-2 gap-3 mb-5">
+                    <div>
+                        <label class="field-label">Speaker</label>
+                        <select id="cv-speaker" class="field-select">
+                            <option value="">Loading...</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="field-label">Language</label>
+                        <select id="cv-language" class="field-select">
+                            <option value="">Loading...</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="mb-5">
+                    <label class="field-label">Style Instruction <span class="text-gray-600">(optional)</span></label>
+                    <textarea id="cv-instruct" class="field-textarea h-16" placeholder='e.g. "Speak warmly and slowly"'></textarea>
+                    <p class="text-xs text-gray-600 mt-1">Controls delivery style — voice identity comes from the speaker preset</p>
+                </div>
+                <div class="mb-5">
+                    <label class="field-label">Text to Speak</label>
+                    <textarea id="cv-text" class="field-textarea h-28" placeholder="Enter the text you want to convert to speech..."></textarea>
+                </div>
+                <button class="generate-btn" onclick="generateCustomVoice()">Generate Speech</button>
+            </div>
+
+            <!-- Voice Clone Tab -->
+            <div id="tab-voice-clone" class="tab-content hidden">
+                <div class="mb-5">
+                    <label class="field-label">Reference Voice Clip</label>
+                    <div id="vc-dropzone" class="dropzone">
+                        <div class="text-2xl mb-2">🎤</div>
+                        <p>Drop audio file here or click to upload</p>
+                        <p class="text-xs text-gray-600 mt-1">WAV, MP3, or M4A · 3-10 seconds recommended</p>
+                        <input type="file" id="vc-file" accept="audio/*" class="hidden">
+                    </div>
+                    <div id="vc-file-info" class="hidden mt-2 text-sm text-gray-400"></div>
+                </div>
+                <div class="mb-5">
+                    <label class="field-label">Reference Transcript</label>
+                    <textarea id="vc-ref-text" class="field-textarea h-16" placeholder="What is said in the reference clip..."></textarea>
+                    <p class="text-xs text-gray-600 mt-1">Must match the reference audio exactly for best results</p>
+                </div>
+                <div class="mb-5">
+                    <label class="field-label">Language</label>
+                    <select id="vc-language" class="field-select">
+                        <option value="">Loading...</option>
+                    </select>
+                    <p class="text-xs text-gray-600 mt-1">Target language — can differ from reference clip</p>
+                </div>
+                <div class="mb-5">
+                    <label class="field-label">Text to Speak</label>
+                    <textarea id="vc-text" class="field-textarea h-20" placeholder="Enter the text you want spoken in the cloned voice..."></textarea>
+                </div>
+                <button class="generate-btn" onclick="generateVoiceClone()">Generate Speech</button>
+            </div>
+
+            <!-- Voice Design Tab -->
+            <div id="tab-voice-design" class="tab-content hidden">
+                <div class="mb-5">
+                    <label class="field-label">Voice Description <span class="text-red-400">*required</span></label>
+                    <textarea id="vd-instruct" class="field-textarea h-20" placeholder='e.g. "A calm, deep male voice with a slight British accent, speaking slowly and thoughtfully"'></textarea>
+                    <p class="text-xs text-gray-600 mt-1">Defines voice identity from scratch — pitch, timbre, accent, personality</p>
+                </div>
+                <div class="mb-5">
+                    <label class="field-label">Language</label>
+                    <select id="vd-language" class="field-select">
+                        <option value="">Loading...</option>
+                    </select>
+                </div>
+                <div class="mb-5">
+                    <label class="field-label">Text to Speak</label>
+                    <textarea id="vd-text" class="field-textarea h-20" placeholder="Enter the text you want spoken..."></textarea>
+                </div>
+                <button class="generate-btn" onclick="generateVoiceDesign()">Generate Speech</button>
+            </div>
+        </div>
+
+        <!-- Right: Output Panel -->
+        <div class="p-6">
+            <label class="field-label mb-3">Output</label>
+
+            <!-- Status Banner -->
+            <div id="status-banner" class="hidden mb-4 p-4 rounded-lg text-sm"></div>
+
+            <!-- Audio Player -->
+            <div id="audio-player" class="bg-bg-tertiary border border-gray-700 rounded-lg p-5 mb-4 hidden">
+                <audio id="audio-element" class="w-full mb-3" controls></audio>
+                <div class="flex gap-2">
+                    <a id="download-btn" class="bg-gray-700 hover:bg-gray-600 text-gray-300 px-4 py-2 rounded text-sm cursor-pointer">Download WAV</a>
+                </div>
+            </div>
+
+            <!-- History -->
+            <label class="field-label mb-2">History</label>
+            <div id="history-list" class="space-y-2">
+                <p class="text-sm text-gray-600">No generations yet</p>
+            </div>
+        </div>
+    </main>
+
+    <script src="/app.js"></script>
 </body>
 </html>
