@@ -1,0 +1,9 @@
+audio_output/*.wav
+voice_clips/*
+!voice_clips/.gitkeep
+!audio_output/.gitkeep
+__pycache__/
+*.pyc
+.venv/
+.env
+.superpowers/

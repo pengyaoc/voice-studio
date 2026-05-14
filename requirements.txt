@@ -1,0 +1,6 @@
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+python-multipart==0.0.20
+qwen-tts>=0.3.0
+soundfile>=0.13.1
+torch>=2.6.0
