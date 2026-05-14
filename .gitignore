@@ -1,9 +1,8 @@
-audio_output/*.wav
-voice_clips/*
-!voice_clips/.gitkeep
-!audio_output/.gitkeep
+audio_output/
+voice_clips/
 __pycache__/
 *.pyc
 .venv/
 .env
 .superpowers/
+.claude/
