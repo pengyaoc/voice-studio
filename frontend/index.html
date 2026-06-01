@@ -24,7 +24,14 @@
     <!-- Header -->
     <header class="flex items-center justify-between px-6 py-4 border-b border-gray-800">
         <h1 class="text-xl font-bold text-white">Voice Studio</h1>
-        <span class="text-xs text-gray-500" id="device-badge">Qwen3-TTS</span>
+        <div class="flex items-center gap-3">
+            <label class="text-xs text-gray-500">Model</label>
+            <div id="model-size-toggle" class="flex rounded-md overflow-hidden border border-gray-700">
+                <button class="model-size-btn active px-3 py-1 text-xs" data-size="0.6B">0.6B Fast</button>
+                <button class="model-size-btn px-3 py-1 text-xs" data-size="1.7B">1.7B Quality</button>
+            </div>
+            <span class="text-xs text-gray-500" id="device-badge">Qwen3-TTS</span>
+        </div>
     </header>
 
     <!-- Tab Bar -->
@@ -70,6 +77,13 @@
             <div id="tab-voice-clone" class="tab-content hidden">
                 <div class="mb-5">
                     <label class="field-label">Reference Voice Clip</label>
+                    <div class="mb-3">
+                        <label class="field-label">Saved Clip</label>
+                        <select id="vc-saved-clips" class="field-select">
+                            <option value="">Choose a saved clip...</option>
+                        </select>
+                        <p class="text-xs text-gray-600 mt-1">Uploaded clips are kept on the server and can be reused across sessions.</p>
+                    </div>
                     <div id="vc-dropzone" class="dropzone">
                         <div class="text-2xl mb-2">🎤</div>
                         <p>Drop audio file here or click to upload</p>
@@ -81,7 +95,7 @@
                 <div class="mb-5">
                     <label class="field-label">Reference Transcript</label>
                     <textarea id="vc-ref-text" class="field-textarea h-16" placeholder="What is said in the reference clip..."></textarea>
-                    <p class="text-xs text-gray-600 mt-1">Must match the reference audio exactly for best results</p>
+                    <p id="vc-ref-help" class="text-xs text-gray-600 mt-1">Must match the reference audio exactly for best results</p>
                 </div>
                 <div class="mb-5">
                     <label class="field-label">Language</label>

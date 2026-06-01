@@ -128,3 +128,22 @@
     border: 1px solid rgba(255, 107, 107, 0.3);
     color: #ff6b6b;
 }
+
+.model-size-btn {
+    background: #2a2a3e;
+    color: #888;
+    border: none;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.model-size-btn:hover:not(:disabled) {
+    background: #3a3a4e;
+    color: #ccc;
+}
+
+.model-size-btn.active {
+    background: #7c8aff;
+    color: #fff;
+    font-weight: 600;
+}
