@@ -1,11 +1,27 @@
 import os
 import shutil
+import json
 from pydantic import BaseModel
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi.responses import StreamingResponse
 from backend.models import model_manager, ModelVariant, ModelSize, MODEL_IDS
 from backend.history import list_history
-from backend.preferences import get_clone_preferences, save_clone_preferences
-from backend.tts import generate_custom_voice, generate_voice_clone, generate_voice_design
+from backend.preferences import (
+    create_clone_profile,
+    delete_clone_profile,
+    get_clone_preferences,
+    get_clone_profiles_state,
+    save_clone_preferences,
+    select_clone_profile,
+    update_clone_profile,
+)
+from backend.tts import (
+    generate_custom_voice,
+    generate_voice_clone,
+    generate_voice_design,
+    stream_custom_voice,
+    stream_voice_clone,
+)
 
 router = APIRouter()
 
@@ -13,6 +29,16 @@ router = APIRouter()
 class VoiceClonePreferencesPayload(BaseModel):
     reference_clip: str = ""
     ref_text: str = ""
+
+
+class VoiceCloneProfilePayload(BaseModel):
+    name: str = ""
+    reference_clip: str = ""
+    ref_text: str = ""
+
+
+class VoiceCloneProfileSelectionPayload(BaseModel):
+    selected_profile_id: str = ""
 
 SPEAKERS = [
     {"id": "Vivian", "name": "Vivian", "language": "Chinese", "description": "Bright, edgy female"},
@@ -31,6 +57,7 @@ LANGUAGES = [
     "French", "Russian", "Portuguese", "Spanish", "Italian",
 ]
 VOICE_CLIPS_DIR = "voice_clips"
+ALLOWED_REFERENCE_CLIP_EXTENSIONS = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".webm"}
 
 
 def _serialize_reference_clip(filename: str) -> dict:
@@ -42,6 +69,10 @@ def _serialize_reference_clip(filename: str) -> dict:
     }
 
 
+def _is_reference_clip_file(filename: str) -> bool:
+    return os.path.splitext(filename)[1].lower() in ALLOWED_REFERENCE_CLIP_EXTENSIONS
+
+
 def _resolve_reference_clip(filename: str) -> str:
     safe_name = os.path.basename(filename)
     if safe_name != filename:
@@ -51,6 +82,21 @@ def _resolve_reference_clip(filename: str) -> str:
     if not os.path.exists(clip_path):
         raise HTTPException(status_code=404, detail=f"Reference clip not found: {filename}")
     return clip_path
+
+
+def _save_uploaded_reference_clip(upload: UploadFile) -> dict:
+    if not upload.filename:
+        raise HTTPException(status_code=400, detail="Missing uploaded file name")
+
+    os.makedirs(VOICE_CLIPS_DIR, exist_ok=True)
+    filename = os.path.basename(upload.filename)
+    if not filename:
+        raise HTTPException(status_code=400, detail="Invalid uploaded file name")
+
+    clip_path = os.path.join(VOICE_CLIPS_DIR, filename)
+    with open(clip_path, "wb") as f:
+        shutil.copyfileobj(upload.file, f)
+    return _serialize_reference_clip(filename)
 
 
 @router.get("/voices")
@@ -93,12 +139,25 @@ async def reference_clips():
     os.makedirs(VOICE_CLIPS_DIR, exist_ok=True)
     clips = []
     for filename in sorted(os.listdir(VOICE_CLIPS_DIR)):
-        if filename.startswith("."):
+        if filename.startswith(".") or not _is_reference_clip_file(filename):
             continue
         filepath = os.path.join(VOICE_CLIPS_DIR, filename)
         if os.path.isfile(filepath):
             clips.append(_serialize_reference_clip(filename))
     return {"items": clips}
+
+
+@router.post("/reference-clips")
+async def upload_reference_clip(file: UploadFile = File(...)):
+    return {"item": _save_uploaded_reference_clip(file)}
+
+
+def _ndjson_response(events) -> StreamingResponse:
+    def generate():
+        for event in events:
+            yield json.dumps(event, ensure_ascii=True) + "\n"
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
 
 
 @router.get("/voice-clone/preferences")
@@ -112,6 +171,63 @@ async def save_voice_clone_preferences(payload: VoiceClonePreferencesPayload):
         reference_clip=payload.reference_clip,
         ref_text=payload.ref_text,
     )
+
+
+@router.get("/voice-clone/profiles")
+async def voice_clone_profiles():
+    return get_clone_profiles_state()
+
+
+@router.post("/voice-clone/profiles")
+async def create_voice_clone_profile(payload: VoiceCloneProfilePayload):
+    if not payload.name.strip():
+        raise HTTPException(status_code=400, detail="Voice name is required")
+    if not payload.reference_clip:
+        raise HTTPException(status_code=400, detail="Reference clip is required")
+    if not payload.ref_text.strip():
+        raise HTTPException(status_code=400, detail="Reference transcript is required")
+    _resolve_reference_clip(payload.reference_clip)
+    return create_clone_profile(
+        name=payload.name,
+        reference_clip=payload.reference_clip,
+        ref_text=payload.ref_text,
+    )
+
+
+@router.put("/voice-clone/profiles/{profile_id}")
+async def update_voice_clone_profile(profile_id: str, payload: VoiceCloneProfilePayload):
+    if not payload.name.strip():
+        raise HTTPException(status_code=400, detail="Voice name is required")
+    if not payload.reference_clip:
+        raise HTTPException(status_code=400, detail="Reference clip is required")
+    if not payload.ref_text.strip():
+        raise HTTPException(status_code=400, detail="Reference transcript is required")
+    _resolve_reference_clip(payload.reference_clip)
+    try:
+        return update_clone_profile(
+            profile_id=profile_id,
+            name=payload.name,
+            reference_clip=payload.reference_clip,
+            ref_text=payload.ref_text,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Voice profile not found: {profile_id}")
+
+
+@router.delete("/voice-clone/profiles/{profile_id}")
+async def delete_voice_clone_profile(profile_id: str):
+    try:
+        return delete_clone_profile(profile_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Voice profile not found: {profile_id}")
+
+
+@router.post("/voice-clone/profiles/selected")
+async def select_voice_clone_profile(payload: VoiceCloneProfileSelectionPayload):
+    try:
+        return select_clone_profile(payload.selected_profile_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Voice profile not found: {payload.selected_profile_id}")
 
 
 @router.post("/tts/custom-voice")
@@ -136,6 +252,21 @@ async def tts_custom_voice(
     return result
 
 
+@router.post("/tts/custom-voice/stream")
+async def tts_custom_voice_stream(
+    text: str = Form(...),
+    language: str = Form(...),
+    speaker: str = Form(...),
+    instruct: str = Form(""),
+):
+    return _ndjson_response(stream_custom_voice(
+        text=text,
+        language=language,
+        speaker=speaker,
+        instruct=instruct if instruct else None,
+    ))
+
+
 @router.post("/tts/voice-clone")
 async def tts_voice_clone(
     text: str = Form(...),
@@ -143,6 +274,7 @@ async def tts_voice_clone(
     ref_text: str = Form(""),
     ref_audio: UploadFile | None = File(None),
     reference_clip: str = Form(""),
+    profile_name: str = Form(""),
     model_size: str = Form("1.7B"),
 ):
     try:
@@ -153,28 +285,42 @@ async def tts_voice_clone(
     os.makedirs(VOICE_CLIPS_DIR, exist_ok=True)
     clip_path = None
     if ref_audio is not None and ref_audio.filename:
-        clip_path = os.path.join(VOICE_CLIPS_DIR, os.path.basename(ref_audio.filename))
-        with open(clip_path, "wb") as f:
-            shutil.copyfileobj(ref_audio.file, f)
+        clip_path = os.path.join(VOICE_CLIPS_DIR, _save_uploaded_reference_clip(ref_audio)["filename"])
     elif reference_clip:
         clip_path = _resolve_reference_clip(reference_clip)
 
     if clip_path is None:
         raise HTTPException(status_code=400, detail="Provide a reference audio file or choose a saved clip")
 
-    save_clone_preferences(
-        reference_clip=os.path.basename(clip_path),
-        ref_text=ref_text,
-    )
-
     result = generate_voice_clone(
         text=text,
         language=language,
         ref_audio_path=clip_path,
         ref_text=ref_text if ref_text else None,
+        profile_name=profile_name if profile_name else None,
         model_size=size,
     )
     return result
+
+
+@router.post("/tts/voice-clone/stream")
+async def tts_voice_clone_stream(
+    text: str = Form(...),
+    language: str = Form(...),
+    ref_text: str = Form(""),
+    reference_clip: str = Form(""),
+    profile_name: str = Form(""),
+):
+    if not reference_clip:
+        raise HTTPException(status_code=400, detail="Choose a saved clip before using streaming mode")
+
+    return _ndjson_response(stream_voice_clone(
+        text=text,
+        language=language,
+        ref_audio_path=_resolve_reference_clip(reference_clip),
+        ref_text=ref_text if ref_text else None,
+        profile_name=profile_name if profile_name else None,
+    ))
 
 
 @router.post("/tts/voice-design")

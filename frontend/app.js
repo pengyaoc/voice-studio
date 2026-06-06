@@ -1,8 +1,35 @@
 let history = [];
-let currentTab = "custom-voice";
-let currentModelSize = "0.6B";
+let currentTab = "voice-clone";
+const STREAMING_MODE = "stream";
+let currentModelSize = STREAMING_MODE;
 let availableModelSizes = {};
 const activeGenerations = new Set();
+let playbackQueue = [];
+let streamPlaybackActive = false;
+
+let availableReferenceClips = [];
+let cloneProfiles = [];
+let selectedCloneProfileId = "";
+let uploadInFlight = null;
+let profileModalMode = "new";
+let profileModalEditingId = "";
+let profileModalSelectedClip = "";
+
+const profilesList = document.getElementById("vc-profiles");
+const newProfileBtn = document.getElementById("vc-new-profile");
+const editProfileBtn = document.getElementById("vc-edit-profile");
+const deleteProfileBtn = document.getElementById("vc-delete-profile");
+const profileModal = document.getElementById("vc-profile-modal");
+const profileModalTitle = document.getElementById("vc-modal-title");
+const profileModalName = document.getElementById("vc-modal-name");
+const profileModalClip = document.getElementById("vc-modal-clip");
+const profileModalRefText = document.getElementById("vc-modal-ref-text");
+const profileModalFile = document.getElementById("vc-modal-file");
+const profileModalFileInfo = document.getElementById("vc-modal-file-info");
+const profileModalUploadTrigger = document.getElementById("vc-modal-upload-trigger");
+const profileModalSave = document.getElementById("vc-modal-save");
+const profileModalCancel = document.getElementById("vc-modal-cancel");
+const profileModalClose = document.getElementById("vc-modal-close");
 
 function escapeHtml(text) {
     return String(text).replace(/[&<>"']/g, (char) => ({
@@ -14,12 +41,40 @@ function escapeHtml(text) {
     }[char]));
 }
 
+function formatSeconds(seconds) {
+    return `${Number(seconds).toFixed(2)}s`;
+}
+
+function truncateText(text, maxLength = 120) {
+    if (!text) return "";
+    return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function normalizeCloneProfile(profile) {
+    return {
+        id: profile.id,
+        name: profile.name || "",
+        reference_clip: profile.reference_clip || "",
+        ref_text: profile.ref_text || "",
+        created_at: profile.created_at || "",
+        updated_at: profile.updated_at || "",
+    };
+}
+
+function selectedCloneProfile() {
+    return cloneProfiles.find((profile) => profile.id === selectedCloneProfileId) || null;
+}
+
+function findReferenceClip(filename) {
+    return availableReferenceClips.find((item) => item.filename === filename) || null;
+}
+
 function buildHistoryMeta(item) {
     const text = item.text || "Recovered generation";
     const snippet = item.snippet || (text.length > 40 ? text.substring(0, 40) + "..." : text);
     let label = item.label || item.mode.replace("_", " ");
     if (item.speaker) label = item.speaker;
-    if (item.mode === "voice_clone") label = "Cloned voice";
+    if (item.mode === "voice_clone") label = item.profile_name || "Cloned voice";
     if (item.mode === "voice_design") label = "Designed voice";
     if (item.mode === "recovered") label = item.label || "Recovered clip";
     return { ...item, text, snippet, label };
@@ -34,7 +89,19 @@ function renderHistory() {
 
     list.innerHTML = history
         .map((item) => {
-            const meta = `${item.label} · ${item.language} · ${item.model_size || "1.7B"} · ${item.duration}s`;
+            const parts = [
+                item.label,
+                item.language,
+                item.model_size || "1.7B",
+                `${item.duration}s`,
+            ];
+            if (item.processing_time != null) {
+                parts.push(`processed in ${formatSeconds(item.processing_time)}`);
+            }
+            if (item.streaming) {
+                parts.push("stream");
+            }
+            const meta = parts.join(" · ");
             return `
         <div class="history-item" onclick="showAudio('${item.filename}')">
             <div>
@@ -48,15 +115,128 @@ function renderHistory() {
         .join("");
 }
 
+function renderCloneProfiles() {
+    if (!cloneProfiles.length) {
+        profilesList.innerHTML = `
+            <div class="voice-profile-empty">
+                No saved voices yet. Click <strong>New Voice</strong> to create one.
+            </div>
+        `;
+        return;
+    }
+
+    profilesList.innerHTML = cloneProfiles
+        .map((profile) => {
+            const isActive = profile.id === selectedCloneProfileId;
+            return `
+                <button class="voice-profile-card${isActive ? " active" : ""}" type="button" data-profile-id="${escapeHtml(profile.id)}">
+                    <div class="voice-profile-card-top">
+                        <div class="voice-profile-card-name">${escapeHtml(profile.name)}</div>
+                        ${isActive ? '<span class="voice-profile-card-badge">Active</span>' : ""}
+                    </div>
+                </button>
+            `;
+        })
+        .join("");
+
+    profilesList.querySelectorAll("[data-profile-id]").forEach((button) => {
+        button.addEventListener("click", () => {
+            void selectCloneProfileAction(button.dataset.profileId);
+        });
+    });
+}
+
+function syncCloneProfileUI() {
+    renderCloneProfiles();
+    const hasSelection = Boolean(selectedCloneProfile());
+    editProfileBtn.disabled = !hasSelection;
+    deleteProfileBtn.disabled = !hasSelection;
+}
+
+function renderProfileModalClipOptions() {
+    profileModalClip.innerHTML = `
+        <option value="">Choose an uploaded clip...</option>
+        ${availableReferenceClips.map((clip) => `<option value="${clip.filename}">${clip.filename}</option>`).join("")}
+    `;
+    profileModalClip.value = profileModalSelectedClip;
+    updateProfileModalFileInfo();
+}
+
+function updateProfileModalFileInfo() {
+    if (!profileModalSelectedClip) {
+        profileModalFileInfo.textContent = "";
+        return;
+    }
+
+    const clip = findReferenceClip(profileModalSelectedClip);
+    if (clip) {
+        profileModalFileInfo.textContent = `${clip.filename} (${(clip.size / 1024).toFixed(1)} KB)`;
+    } else {
+        profileModalFileInfo.textContent = profileModalSelectedClip;
+    }
+}
+
+function openProfileModal(mode) {
+    const selected = selectedCloneProfile();
+    if (mode === "edit" && !selected) {
+        showStatus("Choose a saved voice to edit.", "error");
+        return;
+    }
+
+    profileModalMode = mode;
+    profileModalEditingId = mode === "edit" && selected ? selected.id : "";
+    profileModalTitle.textContent = mode === "edit" ? "Edit Voice" : "New Voice";
+    profileModalSave.textContent = mode === "edit" ? "Save Changes" : "Save Voice";
+
+    profileModalName.value = selected && mode === "edit" ? selected.name : "";
+    profileModalRefText.value = selected && mode === "edit" ? selected.ref_text : "";
+    profileModalSelectedClip = selected && mode === "edit" ? selected.reference_clip : "";
+    renderProfileModalClipOptions();
+
+    profileModal.classList.remove("hidden");
+}
+
+function closeProfileModal() {
+    profileModal.classList.add("hidden");
+    profileModalFile.value = "";
+    profileModalFileInfo.textContent = "";
+}
+
+function modalPayload() {
+    return {
+        name: profileModalName.value.trim(),
+        reference_clip: profileModalSelectedClip,
+        ref_text: profileModalRefText.value.trim(),
+    };
+}
+
+function isProfileModalValid() {
+    const payload = modalPayload();
+    return Boolean(payload.name && payload.reference_clip && payload.ref_text);
+}
+
 // --- Model Size Toggle ---
+function isStreamingAvailable(variant) {
+    const sizes = availableModelSizes[variant] || [];
+    return variant !== "voice_design" && sizes.includes("0.6B");
+}
+
+function getAvailableModes(variant) {
+    const sizes = [...(availableModelSizes[variant] || ["1.7B"])];
+    if (isStreamingAvailable(variant)) {
+        sizes.push(STREAMING_MODE);
+    }
+    return sizes;
+}
+
 document.querySelectorAll(".model-size-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
         const size = btn.dataset.size;
-        const variant = currentTab.replace("-", "_");
-        if (availableModelSizes[variant] && !availableModelSizes[variant].includes(size)) {
+        const modes = getAvailableModes(currentTab.replace("-", "_"));
+        if (!modes.includes(size)) {
             return;
         }
-        document.querySelectorAll(".model-size-btn").forEach((b) => b.classList.remove("active"));
+        document.querySelectorAll(".model-size-btn").forEach((button) => button.classList.remove("active"));
         btn.classList.add("active");
         currentModelSize = size;
     });
@@ -64,7 +244,7 @@ document.querySelectorAll(".model-size-btn").forEach((btn) => {
 
 function updateModelSizeButtons() {
     const variant = currentTab.replace("-", "_");
-    const sizes = availableModelSizes[variant] || ["1.7B"];
+    const sizes = getAvailableModes(variant);
     document.querySelectorAll(".model-size-btn").forEach((btn) => {
         const available = sizes.includes(btn.dataset.size);
         btn.disabled = !available;
@@ -72,8 +252,8 @@ function updateModelSizeButtons() {
         btn.classList.toggle("cursor-not-allowed", !available);
     });
     if (!sizes.includes(currentModelSize)) {
-        currentModelSize = sizes[sizes.length - 1];
-        document.querySelectorAll(".model-size-btn").forEach((b) => b.classList.remove("active"));
+        currentModelSize = sizes.includes("0.6B") ? "0.6B" : sizes[sizes.length - 1];
+        document.querySelectorAll(".model-size-btn").forEach((button) => button.classList.remove("active"));
         document.querySelector(`.model-size-btn[data-size="${currentModelSize}"]`)?.classList.add("active");
     }
 }
@@ -81,11 +261,11 @@ function updateModelSizeButtons() {
 // --- Tab Switching ---
 document.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-        document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+        document.querySelectorAll(".tab-btn").forEach((button) => button.classList.remove("active"));
         btn.classList.add("active");
 
         currentTab = btn.dataset.tab;
-        document.querySelectorAll(".tab-content").forEach((c) => c.classList.add("hidden"));
+        document.querySelectorAll(".tab-content").forEach((content) => content.classList.add("hidden"));
         document.getElementById(`tab-${currentTab}`).classList.remove("hidden");
         updateModelSizeButtons();
     });
@@ -99,14 +279,14 @@ async function loadVoices() {
 
         const speakerSelect = document.getElementById("cv-speaker");
         speakerSelect.innerHTML = data.speakers
-            .map((s) => `<option value="${s.id}">${s.name} — ${s.description} (${s.language})</option>`)
+            .map((speaker) => `<option value="${speaker.id}">${speaker.name} — ${speaker.description} (${speaker.language})</option>`)
             .join("");
 
         const languageSelects = ["cv-language", "vc-language", "vd-language"];
         languageSelects.forEach((id) => {
-            const sel = document.getElementById(id);
-            sel.innerHTML = data.languages
-                .map((l) => `<option value="${l}">${l}</option>`)
+            const select = document.getElementById(id);
+            select.innerHTML = data.languages
+                .map((language) => `<option value="${language}">${language}</option>`)
                 .join("");
         });
 
@@ -114,7 +294,6 @@ async function loadVoices() {
             availableModelSizes = data.model_sizes;
             updateModelSizeButtons();
         }
-        updateCloneModeHelp();
     } catch (e) {
         console.error("Failed to load voices:", e);
     }
@@ -131,126 +310,197 @@ async function loadHistory() {
     }
 }
 
-// --- File Upload (Voice Clone) ---
-const dropzone = document.getElementById("vc-dropzone");
-const fileInput = document.getElementById("vc-file");
-const fileInfo = document.getElementById("vc-file-info");
-const savedClipsSelect = document.getElementById("vc-saved-clips");
-const refTextInput = document.getElementById("vc-ref-text");
-const refHelp = document.getElementById("vc-ref-help");
-let availableReferenceClips = [];
-
-dropzone.addEventListener("click", () => fileInput.click());
-dropzone.addEventListener("dragover", (e) => {
-    e.preventDefault();
-    dropzone.classList.add("dragover");
-});
-dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
-dropzone.addEventListener("drop", (e) => {
-    e.preventDefault();
-    dropzone.classList.remove("dragover");
-    if (e.dataTransfer.files.length) {
-        fileInput.files = e.dataTransfer.files;
-        savedClipsSelect.value = "";
-        showFileInfo(e.dataTransfer.files[0]);
-        persistClonePreferences();
-    }
-});
-fileInput.addEventListener("change", () => {
-    if (fileInput.files.length) {
-        savedClipsSelect.value = "";
-        showFileInfo(fileInput.files[0]);
-        persistClonePreferences();
-    }
-});
-savedClipsSelect.addEventListener("change", () => {
-    if (savedClipsSelect.value) {
-        fileInput.value = "";
-        showSavedClipInfo(savedClipsSelect.value);
-    } else if (!fileInput.files.length) {
-        fileInfo.classList.add("hidden");
-    }
-    persistClonePreferences();
-});
-refTextInput.addEventListener("input", persistClonePreferences);
-
-function showFileInfo(file) {
-    fileInfo.textContent = `Selected: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
-    fileInfo.classList.remove("hidden");
-}
-
-function showSavedClipInfo(filename) {
-    const clip = availableReferenceClips.find((item) => item.filename === filename);
-    if (clip) {
-        fileInfo.textContent = `Selected saved clip: ${clip.filename} (${(clip.size / 1024).toFixed(1)} KB)`;
-    } else {
-        fileInfo.textContent = `Selected saved clip: ${filename}`;
-    }
-    fileInfo.classList.remove("hidden");
-}
-
-function getClonePreferences() {
-    return {
-        ref_text: refTextInput.value,
-        reference_clip: fileInput.files[0] ? fileInput.files[0].name : savedClipsSelect.value,
-    };
-}
-
-async function persistClonePreferences() {
-    const prefs = getClonePreferences();
-    try {
-        await fetch("/api/voice-clone/preferences", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(prefs),
-        });
-    } catch (e) {
-        console.error("Failed to persist clone preferences:", e);
-    }
-}
-
-async function restoreClonePreferences() {
-    try {
-        const res = await fetch("/api/voice-clone/preferences");
-        const prefs = await res.json();
-        refTextInput.value = prefs.ref_text || "";
-        updateCloneModeHelp();
-        return prefs;
-    } catch (e) {
-        console.error("Failed to restore clone preferences:", e);
-        updateCloneModeHelp();
-        return {};
-    }
-}
-
-function renderSavedClips(items, prefs = {}) {
-    availableReferenceClips = items;
-    savedClipsSelect.innerHTML = `
-        <option value="">Choose a saved clip...</option>
-        ${items.map((clip) => `<option value="${clip.filename}">${clip.filename}</option>`).join("")}
-    `;
-
-    if (prefs.reference_clip && items.some((clip) => clip.filename === prefs.reference_clip)) {
-        savedClipsSelect.value = prefs.reference_clip;
-        if (!fileInput.files.length) {
-            showSavedClipInfo(prefs.reference_clip);
-        }
-    }
-}
-
-async function loadReferenceClips(prefs = {}) {
+async function loadReferenceClips() {
     try {
         const res = await fetch("/api/reference-clips");
         const data = await res.json();
-        renderSavedClips(data.items || [], prefs);
+        availableReferenceClips = data.items || [];
+        renderProfileModalClipOptions();
     } catch (e) {
         console.error("Failed to load reference clips:", e);
     }
 }
 
-function updateCloneModeHelp() {
-    refHelp.textContent = "Must match the reference audio exactly for best results.";
+async function fetchCloneProfiles() {
+    const res = await fetch("/api/voice-clone/profiles");
+    const data = await res.json();
+    cloneProfiles = (data.profiles || []).map(normalizeCloneProfile);
+    selectedCloneProfileId = data.selected_profile_id || "";
+    syncCloneProfileUI();
+    return data;
 }
+
+async function loadCloneProfiles() {
+    try {
+        await fetchCloneProfiles();
+    } catch (e) {
+        console.error("Failed to load voice profiles:", e);
+    }
+}
+
+async function saveCloneSelection(profileId) {
+    const res = await fetch("/api/voice-clone/profiles/selected", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ selected_profile_id: profileId }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+        throw new Error(data.detail || "Failed to select voice profile.");
+    }
+    cloneProfiles = (data.profiles || []).map(normalizeCloneProfile);
+    selectedCloneProfileId = data.selected_profile_id || "";
+    syncCloneProfileUI();
+    return data;
+}
+
+async function selectCloneProfileAction(profileId) {
+    if (profileId === selectedCloneProfileId) {
+        return;
+    }
+    try {
+        await saveCloneSelection(profileId);
+    } catch (e) {
+        console.error("Failed to select voice profile:", e);
+        showStatus(e.message || "Failed to switch voice profile.", "error");
+    }
+}
+
+async function deleteCloneProfileAction() {
+    if (!selectedCloneProfileId) {
+        return;
+    }
+    if (!window.confirm("Delete this saved voice profile?")) {
+        return;
+    }
+
+    try {
+        const res = await fetch(`/api/voice-clone/profiles/${selectedCloneProfileId}`, {
+            method: "DELETE",
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.detail || "Failed to delete voice profile.");
+        }
+
+        cloneProfiles = (data.profiles || []).map(normalizeCloneProfile);
+        selectedCloneProfileId = data.selected_profile_id || "";
+        syncCloneProfileUI();
+        hideStatus();
+    } catch (e) {
+        console.error("Failed to delete voice profile:", e);
+        showStatus(e.message || "Failed to delete voice profile.", "error");
+    }
+}
+
+async function uploadReferenceClip(file) {
+    const form = new FormData();
+    form.append("file", file);
+
+    const res = await fetch("/api/reference-clips", {
+        method: "POST",
+        body: form,
+    });
+    const data = await res.json();
+    if (!res.ok) {
+        throw new Error(data.detail || "Failed to upload reference clip.");
+    }
+    return data.item;
+}
+
+async function handleProfileModalFileSelected(file) {
+    showStatus("Uploading reference clip...", "loading");
+
+    const uploadPromise = uploadReferenceClip(file);
+    uploadInFlight = uploadPromise;
+
+    try {
+        const clip = await uploadPromise;
+        if (uploadInFlight !== uploadPromise) {
+            return;
+        }
+
+        await loadReferenceClips();
+        profileModalSelectedClip = clip.filename;
+        renderProfileModalClipOptions();
+        profileModalFile.value = "";
+        hideStatus();
+    } catch (e) {
+        if (uploadInFlight === uploadPromise) {
+            showStatus(e.message || "Failed to upload reference clip.", "error");
+        }
+        console.error("Failed to upload reference clip:", e);
+    } finally {
+        if (uploadInFlight === uploadPromise) {
+            uploadInFlight = null;
+        }
+    }
+}
+
+async function saveProfileFromModal() {
+    if (!isProfileModalValid()) {
+        showStatus("Voice name, reference clip, and transcript are required.", "error");
+        return;
+    }
+
+    const payload = modalPayload();
+    const endpoint = profileModalMode === "edit"
+        ? `/api/voice-clone/profiles/${profileModalEditingId}`
+        : "/api/voice-clone/profiles";
+    const method = profileModalMode === "edit" ? "PUT" : "POST";
+
+    try {
+        const res = await fetch(endpoint, {
+            method,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.detail || "Failed to save voice profile.");
+        }
+
+        cloneProfiles = (data.profiles || []).map(normalizeCloneProfile);
+        selectedCloneProfileId = data.selected_profile_id || "";
+        syncCloneProfileUI();
+        closeProfileModal();
+        hideStatus();
+    } catch (e) {
+        console.error("Failed to save voice profile:", e);
+        showStatus(e.message || "Failed to save voice profile.", "error");
+    }
+}
+
+newProfileBtn.addEventListener("click", () => openProfileModal("new"));
+editProfileBtn.addEventListener("click", () => openProfileModal("edit"));
+deleteProfileBtn.addEventListener("click", () => {
+    void deleteCloneProfileAction();
+});
+profileModalUploadTrigger.addEventListener("click", () => profileModalFile.click());
+profileModalFile.addEventListener("change", () => {
+    if (profileModalFile.files.length) {
+        void handleProfileModalFileSelected(profileModalFile.files[0]);
+    }
+});
+profileModalClip.addEventListener("change", () => {
+    profileModalSelectedClip = profileModalClip.value;
+    updateProfileModalFileInfo();
+});
+profileModalSave.addEventListener("click", () => {
+    void saveProfileFromModal();
+});
+profileModalCancel.addEventListener("click", closeProfileModal);
+profileModalClose.addEventListener("click", closeProfileModal);
+profileModal.addEventListener("click", (event) => {
+    if (event.target === profileModal) {
+        closeProfileModal();
+    }
+});
+document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !profileModal.classList.contains("hidden")) {
+        closeProfileModal();
+    }
+});
 
 // --- Status Banner ---
 function showStatus(message, type = "loading") {
@@ -279,7 +529,7 @@ async function pollModelStatus(variant, modelSize) {
             return false;
         }
         showStatus(data.message, "loading");
-        await new Promise((r) => setTimeout(r, 2000));
+        await new Promise((resolve) => setTimeout(resolve, 2000));
     }
 }
 
@@ -292,6 +542,58 @@ function setGenerating(tabId, generating) {
     } else {
         btn.disabled = false;
         btn.textContent = "Generate Speech";
+    }
+}
+
+function stopStreamPlayback() {
+    playbackQueue = [];
+    streamPlaybackActive = false;
+
+    const audio = document.getElementById("audio-element");
+    audio.onended = null;
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load();
+}
+
+function updateDownloadTarget(filename) {
+    const player = document.getElementById("audio-player");
+    const downloadBtn = document.getElementById("download-btn");
+    const url = `/audio/${filename}`;
+
+    player.classList.remove("hidden");
+    downloadBtn.href = url;
+    downloadBtn.download = filename.split("/").pop();
+}
+
+function playNextQueuedChunk() {
+    if (!playbackQueue.length) {
+        streamPlaybackActive = false;
+        return;
+    }
+
+    const audio = document.getElementById("audio-element");
+    const nextUrl = playbackQueue.shift();
+    streamPlaybackActive = true;
+    audio.onended = () => {
+        if (playbackQueue.length) {
+            playNextQueuedChunk();
+            return;
+        }
+        streamPlaybackActive = false;
+    };
+    audio.src = nextUrl;
+    audio.play().catch((error) => {
+        console.error("Failed to play streamed audio chunk:", error);
+    });
+}
+
+function enqueueStreamChunk(filename) {
+    updateDownloadTarget(filename);
+    playbackQueue.push(`/audio/${filename}`);
+    const audio = document.getElementById("audio-element");
+    if (!streamPlaybackActive || audio.ended || !audio.src) {
+        playNextQueuedChunk();
     }
 }
 
@@ -327,6 +629,68 @@ async function handleResponse(res, tabId, variant, meta) {
     return "error";
 }
 
+async function handleStreamingResponse(res, variant, meta) {
+    const reader = res.body?.getReader();
+    if (!reader) {
+        showStatus("Streaming is not supported by this browser response.", "error");
+        return "error";
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+            break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+            if (!line.trim()) {
+                continue;
+            }
+
+            const data = JSON.parse(line);
+            if (data.status === "loading") {
+                showStatus(data.message, "loading");
+                const ready = await pollModelStatus(variant, meta.modelSize);
+                if (!ready) {
+                    return "error";
+                }
+                return "retry";
+            }
+
+            if (data.status === "chunk") {
+                showStatus(`Streaming audio ${data.index + 1}/${data.count}...`, "loading");
+                enqueueStreamChunk(data.filename);
+                continue;
+            }
+
+            if (data.status === "done") {
+                hideStatus();
+                updateDownloadTarget(data.item.filename);
+                addHistory(data.item);
+                if (typeof meta.afterSuccess === "function") {
+                    await meta.afterSuccess(data.item);
+                }
+                return "done";
+            }
+
+            if (data.status === "error") {
+                showStatus(data.message, "error");
+                return "error";
+            }
+        }
+    }
+
+    showStatus("Streaming ended unexpectedly.", "error");
+    return "error";
+}
+
 async function submitGeneration(tabId, endpoint, variant, buildForm, meta) {
     if (activeGenerations.has(tabId)) {
         return;
@@ -352,11 +716,55 @@ async function submitGeneration(tabId, endpoint, variant, buildForm, meta) {
     }
 }
 
+async function submitStreamingGeneration(tabId, endpoint, variant, buildForm, meta) {
+    if (activeGenerations.has(tabId)) {
+        return;
+    }
+
+    activeGenerations.add(tabId);
+    setGenerating(tabId, true);
+    stopStreamPlayback();
+
+    try {
+        while (true) {
+            const res = await fetch(endpoint, { method: "POST", body: buildForm() });
+            const action = await handleStreamingResponse(res, variant, meta);
+            if (action !== "retry") {
+                break;
+            }
+        }
+    } catch (e) {
+        console.error(`Failed to stream for ${tabId}:`, e);
+        showStatus("Streaming failed. Check the server logs and try again.", "error");
+    } finally {
+        activeGenerations.delete(tabId);
+        setGenerating(tabId, false);
+    }
+}
+
 // --- Generate: Custom Voice ---
 async function generateCustomVoice() {
     const text = document.getElementById("cv-text").value.trim();
     if (!text) return;
     const modelSize = currentModelSize;
+
+    if (modelSize === STREAMING_MODE) {
+        await submitStreamingGeneration(
+            "custom-voice",
+            "/api/tts/custom-voice/stream",
+            "custom_voice",
+            () => {
+                const form = new FormData();
+                form.append("text", text);
+                form.append("language", document.getElementById("cv-language").value);
+                form.append("speaker", document.getElementById("cv-speaker").value);
+                form.append("instruct", document.getElementById("cv-instruct").value);
+                return form;
+            },
+            { text, modelSize: "0.6B" },
+        );
+        return;
+    }
 
     await submitGeneration(
         "custom-voice",
@@ -378,16 +786,40 @@ async function generateCustomVoice() {
 // --- Generate: Voice Clone ---
 async function generateVoiceClone() {
     const text = document.getElementById("vc-text").value.trim();
-    const refText = refTextInput.value.trim();
-    const file = document.getElementById("vc-file").files[0];
-    const savedClip = savedClipsSelect.value;
+    const profile = selectedCloneProfile();
     const modelSize = currentModelSize;
-    if (!text || (!file && !savedClip) || !refText) {
-        showStatus("Please upload a reference audio clip and provide the required fields.", "error");
+
+    if (uploadInFlight) {
+        showStatus("Wait for the reference clip upload to finish.", "loading");
+        return;
+    }
+    if (!profile || !profile.reference_clip || !profile.ref_text) {
+        showStatus("Choose a saved voice profile with a clip and transcript before generating.", "error");
+        return;
+    }
+    if (!text) {
+        showStatus("Enter text to speak.", "error");
         return;
     }
 
-    persistClonePreferences();
+    if (modelSize === STREAMING_MODE) {
+        await submitStreamingGeneration(
+            "voice-clone",
+            "/api/tts/voice-clone/stream",
+            "voice_clone",
+            () => {
+                const form = new FormData();
+                form.append("text", text);
+                form.append("language", document.getElementById("vc-language").value);
+                form.append("ref_text", profile.ref_text);
+                form.append("reference_clip", profile.reference_clip);
+                form.append("profile_name", profile.name);
+                return form;
+            },
+            { text, modelSize: "0.6B" },
+        );
+        return;
+    }
 
     await submitGeneration(
         "voice-clone",
@@ -397,23 +829,13 @@ async function generateVoiceClone() {
             const form = new FormData();
             form.append("text", text);
             form.append("language", document.getElementById("vc-language").value);
-            form.append("ref_text", refText);
-            if (file) {
-                form.append("ref_audio", file);
-            } else if (savedClip) {
-                form.append("reference_clip", savedClip);
-            }
+            form.append("ref_text", profile.ref_text);
+            form.append("reference_clip", profile.reference_clip);
+            form.append("profile_name", profile.name);
             form.append("model_size", modelSize);
             return form;
         },
-        {
-            text,
-            modelSize,
-            afterSuccess: async () => {
-                await loadReferenceClips();
-                persistClonePreferences();
-            },
-        },
+        { text, modelSize },
     );
 }
 
@@ -444,16 +866,11 @@ async function generateVoiceDesign() {
 
 // --- Audio Player ---
 function showAudio(filename) {
-    const player = document.getElementById("audio-player");
+    stopStreamPlayback();
     const audio = document.getElementById("audio-element");
-    const downloadBtn = document.getElementById("download-btn");
-
     const url = `/audio/${filename}`;
+    updateDownloadTarget(filename);
     audio.src = url;
-    downloadBtn.href = url;
-    downloadBtn.download = filename;
-
-    player.classList.remove("hidden");
     audio.play();
 }
 
@@ -463,9 +880,16 @@ function addHistory(item) {
     renderHistory();
 }
 
-// --- Init ---
-loadVoices();
-loadHistory();
-restoreClonePreferences();
-loadReferenceClips();
-updateCloneModeHelp();
+async function init() {
+    editProfileBtn.disabled = true;
+    deleteProfileBtn.disabled = true;
+    renderCloneProfiles();
+    await Promise.all([
+        loadVoices(),
+        loadHistory(),
+        loadReferenceClips(),
+        loadCloneProfiles(),
+    ]);
+}
+
+void init();

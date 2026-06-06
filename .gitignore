@@ -2,6 +2,7 @@ audio_output/
 voice_clips/
 __pycache__/
 *.pyc
+.DS_Store
 .venv/
 .env
 .superpowers/

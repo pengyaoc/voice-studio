@@ -27,7 +27,8 @@
         <div class="flex items-center gap-3">
             <label class="text-xs text-gray-500">Model</label>
             <div id="model-size-toggle" class="flex rounded-md overflow-hidden border border-gray-700">
-                <button class="model-size-btn active px-3 py-1 text-xs" data-size="0.6B">0.6B Fast</button>
+                <button class="model-size-btn px-3 py-1 text-xs" data-size="0.6B">0.6B Fast</button>
+                <button class="model-size-btn active px-3 py-1 text-xs" data-size="stream">Streaming</button>
                 <button class="model-size-btn px-3 py-1 text-xs" data-size="1.7B">1.7B Quality</button>
             </div>
             <span class="text-xs text-gray-500" id="device-badge">Qwen3-TTS</span>
@@ -36,8 +37,8 @@
 
     <!-- Tab Bar -->
     <nav class="flex border-b border-gray-800" id="tab-bar">
-        <button class="tab-btn active" data-tab="custom-voice">Custom Voice</button>
-        <button class="tab-btn" data-tab="voice-clone">Voice Clone</button>
+        <button class="tab-btn" data-tab="custom-voice">Custom Voice</button>
+        <button class="tab-btn active" data-tab="voice-clone">Voice Clone</button>
         <button class="tab-btn" data-tab="voice-design">Voice Design</button>
     </nav>
 
@@ -46,7 +47,7 @@
         <!-- Left: Input Panel -->
         <div class="p-6 border-r border-gray-800">
             <!-- Custom Voice Tab -->
-            <div id="tab-custom-voice" class="tab-content">
+            <div id="tab-custom-voice" class="tab-content hidden">
                 <div class="grid grid-cols-2 gap-3 mb-5">
                     <div>
                         <label class="field-label">Speaker</label>
@@ -74,29 +75,22 @@
             </div>
 
             <!-- Voice Clone Tab -->
-            <div id="tab-voice-clone" class="tab-content hidden">
-                <div class="mb-5">
-                    <label class="field-label">Reference Voice Clip</label>
-                    <div class="mb-3">
-                        <label class="field-label">Saved Clip</label>
-                        <select id="vc-saved-clips" class="field-select">
-                            <option value="">Choose a saved clip...</option>
-                        </select>
-                        <p class="text-xs text-gray-600 mt-1">Uploaded clips are kept on the server and can be reused across sessions.</p>
+            <div id="tab-voice-clone" class="tab-content">
+                <div class="voice-profiles-panel mb-5">
+                    <div class="voice-profiles-header">
+                        <div>
+                            <label class="field-label">Saved Voices</label>
+                            <p class="text-xs text-gray-600 mt-1">Store a clip and its exact transcript together so you can switch between people instantly.</p>
+                        </div>
+                        <div class="voice-profile-actions">
+                            <button id="vc-new-profile" type="button" class="profile-action-btn">New Voice</button>
+                            <button id="vc-edit-profile" type="button" class="profile-action-btn profile-action-btn-primary">Edit Voice</button>
+                            <button id="vc-delete-profile" type="button" class="profile-action-btn profile-action-btn-danger">Delete</button>
+                        </div>
                     </div>
-                    <div id="vc-dropzone" class="dropzone">
-                        <div class="text-2xl mb-2">🎤</div>
-                        <p>Drop audio file here or click to upload</p>
-                        <p class="text-xs text-gray-600 mt-1">WAV, MP3, or M4A · 3-10 seconds recommended</p>
-                        <input type="file" id="vc-file" accept="audio/*" class="hidden">
-                    </div>
-                    <div id="vc-file-info" class="hidden mt-2 text-sm text-gray-400"></div>
+                    <div id="vc-profiles" class="voice-profiles-list"></div>
                 </div>
-                <div class="mb-5">
-                    <label class="field-label">Reference Transcript</label>
-                    <textarea id="vc-ref-text" class="field-textarea h-16" placeholder="What is said in the reference clip..."></textarea>
-                    <p id="vc-ref-help" class="text-xs text-gray-600 mt-1">Must match the reference audio exactly for best results</p>
-                </div>
+
                 <div class="mb-5">
                     <label class="field-label">Language</label>
                     <select id="vc-language" class="field-select">
@@ -154,6 +148,46 @@
             </div>
         </div>
     </main>
+
+    <div id="vc-profile-modal" class="modal-overlay hidden">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div>
+                    <h2 id="vc-modal-title" class="text-white text-lg font-semibold">New Voice</h2>
+                    <p class="text-xs text-gray-500 mt-1">Save a voice name, reference clip, and matching transcript together.</p>
+                </div>
+                <button id="vc-modal-close" type="button" class="modal-close-btn">×</button>
+            </div>
+
+            <div class="mb-4">
+                <label class="field-label">Voice Name</label>
+                <input id="vc-modal-name" class="field-input" type="text" placeholder="e.g. Pengyao CN">
+            </div>
+
+            <div class="mb-4">
+                <label class="field-label">Reference Clip</label>
+                <select id="vc-modal-clip" class="field-select">
+                    <option value="">Choose an uploaded clip...</option>
+                </select>
+                <div class="modal-upload-row mt-3">
+                    <button id="vc-modal-upload-trigger" type="button" class="profile-action-btn">Upload New Clip</button>
+                    <input id="vc-modal-file" type="file" accept="audio/*" class="hidden">
+                    <div id="vc-modal-file-info" class="text-sm text-gray-400"></div>
+                </div>
+            </div>
+
+            <div class="mb-4">
+                <label class="field-label">Reference Transcript</label>
+                <textarea id="vc-modal-ref-text" class="field-textarea h-28" placeholder="What is said in the reference clip..."></textarea>
+                <p class="text-xs text-gray-600 mt-1">This transcript must match the reference audio exactly.</p>
+            </div>
+
+            <div class="modal-actions">
+                <button id="vc-modal-cancel" type="button" class="profile-action-btn">Cancel</button>
+                <button id="vc-modal-save" type="button" class="profile-action-btn profile-action-btn-primary">Save Voice</button>
+            </div>
+        </div>
+    </div>
 
     <script src="/app.js"></script>
 </body>

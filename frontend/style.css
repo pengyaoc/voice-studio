@@ -39,6 +39,16 @@
     appearance: auto;
 }
 
+.field-input {
+    width: 100%;
+    background: #2a2a3e;
+    border: 1px solid #444;
+    border-radius: 0.375rem;
+    padding: 0.625rem 0.875rem;
+    color: #fff;
+    font-size: 0.875rem;
+}
+
 .field-textarea {
     width: 100%;
     background: #2a2a3e;
@@ -50,11 +60,13 @@
     resize: vertical;
 }
 
+.field-input::placeholder,
 .field-textarea::placeholder,
 .field-select option:first-child {
     color: #666;
 }
 
+.field-input:focus,
 .field-textarea:focus,
 .field-select:focus {
     outline: none;
@@ -146,4 +158,193 @@
     background: #7c8aff;
     color: #fff;
     font-weight: 600;
+}
+
+.voice-profiles-panel {
+    background: rgba(42, 42, 62, 0.55);
+    border: 1px solid #34344a;
+    border-radius: 0.75rem;
+    padding: 1rem;
+}
+
+.voice-profiles-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: flex-start;
+    margin-bottom: 0.875rem;
+}
+
+.voice-profile-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.profile-action-btn {
+    background: #2a2a3e;
+    border: 1px solid #444;
+    color: #ddd;
+    border-radius: 999px;
+    padding: 0.45rem 0.85rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.profile-action-btn:hover:not(:disabled) {
+    border-color: #7c8aff;
+    color: #fff;
+}
+
+.profile-action-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.profile-action-btn-primary {
+    background: #7c8aff;
+    border-color: #7c8aff;
+    color: #fff;
+}
+
+.profile-action-btn-primary:hover:not(:disabled) {
+    background: #6b78ee;
+    border-color: #6b78ee;
+}
+
+.profile-action-btn-danger:hover:not(:disabled) {
+    border-color: #ff6b6b;
+    color: #ff8f8f;
+}
+
+.voice-profiles-list {
+    display: grid;
+    gap: 0.625rem;
+}
+
+.voice-profile-card {
+    width: 100%;
+    background: #1f1f31;
+    border: 1px solid #34344a;
+    border-radius: 0.75rem;
+    padding: 1rem 1.1rem;
+    text-align: left;
+    color: #fff;
+    cursor: pointer;
+    transition: border-color 0.15s, transform 0.15s, background 0.15s;
+}
+
+.voice-profile-card:hover {
+    border-color: #7c8aff;
+    transform: translateY(-1px);
+}
+
+.voice-profile-card.active {
+    border-color: #7c8aff;
+    background: rgba(124, 138, 255, 0.12);
+    box-shadow: inset 0 0 0 1px rgba(124, 138, 255, 0.2);
+}
+
+.voice-profile-card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+}
+
+.voice-profile-card-name {
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.voice-profile-card-badge {
+    color: #7c8aff;
+    background: rgba(124, 138, 255, 0.14);
+    border: 1px solid rgba(124, 138, 255, 0.25);
+    border-radius: 999px;
+    padding: 0.15rem 0.5rem;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.voice-profile-empty {
+    border: 1px dashed #444;
+    border-radius: 0.75rem;
+    padding: 1rem;
+    color: #888;
+    font-size: 0.85rem;
+    background: rgba(26, 26, 46, 0.45);
+}
+
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(8, 8, 14, 0.76);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    z-index: 50;
+}
+
+.modal-card {
+    width: min(100%, 42rem);
+    background: #141423;
+    border: 1px solid #34344a;
+    border-radius: 1rem;
+    padding: 1.25rem;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+}
+
+.modal-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.modal-close-btn {
+    background: transparent;
+    border: none;
+    color: #888;
+    font-size: 1.75rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.modal-close-btn:hover {
+    color: #fff;
+}
+
+.modal-upload-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+@media (max-width: 900px) {
+    .voice-profiles-header {
+        flex-direction: column;
+    }
+
+    .voice-profile-actions {
+        justify-content: flex-start;
+    }
+
+    .modal-actions {
+        justify-content: stretch;
+        flex-direction: column;
+    }
 }
